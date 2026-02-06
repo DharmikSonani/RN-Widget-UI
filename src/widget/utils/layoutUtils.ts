@@ -1,12 +1,13 @@
 import { COLUMN_WIDTH, COLUMNS, MARGIN, ROW_HEIGHT, GRID_STEP_X, GRID_STEP_Y } from './measure';
+import { Widget } from './types';
 
-export const getGridSizeFromDimensions = (width, height) => {
+export const getGridSizeFromDimensions = (width: number, height: number) => {
     const colSpan = width > COLUMN_WIDTH + 20 ? 2 : 1;
     const rowSpan = height > ROW_HEIGHT + 20 ? 2 : 1;
     return { colSpan, rowSpan };
 }
 
-export const getDimensionsFromGridSize = (colSpan, rowSpan) => {
+export const getDimensionsFromGridSize = (colSpan: number, rowSpan: number) => {
     return {
         width: colSpan * COLUMN_WIDTH + (colSpan - 1) * MARGIN,
         height: rowSpan * ROW_HEIGHT + (rowSpan - 1) * MARGIN
@@ -23,7 +24,7 @@ export const getDimensionsFromGridSize = (colSpan, rowSpan) => {
  * - Reduced object creation
  * - Early exit conditions
  */
-export const recalculateLayout = (widgets) => {
+export const recalculateLayout = (widgets: Widget[]): Widget[] => {
     // Early exit for empty widgets
     if (widgets.length === 0) return [];
 
@@ -69,12 +70,15 @@ export const recalculateLayout = (widgets) => {
         // OPTIMIZATION: Object Identity Preservation
         // If the calculated layout matches the existing one, return the original object.
         // This prevents React.memo from invalidating the component.
+        // @ts-ignore - gridRow/gridCol might not be on Widget type yet but used internally
         if (
             widget.x === newX &&
             widget.y === newY &&
             widget.width === newW &&
             widget.height === newH &&
+            // @ts-ignore
             widget.gridRow === bestRow &&
+            // @ts-ignore
             widget.gridCol === bestCol
         ) {
             return widget;
@@ -89,7 +93,7 @@ export const recalculateLayout = (widgets) => {
             // Store grid position for easier sorting/debugging
             gridRow: bestRow,
             gridCol: bestCol,
-        };
+        } as Widget;
     });
 
     // Sort by Y position for virtualization efficiency
@@ -105,22 +109,13 @@ export const recalculateLayout = (widgets) => {
 /**
  * Optimized reordering with direction-aware insertion.
  * Uses Binary Search to find insertion index based on sorts produced by layout.
- * 
- * Key Fix: When dragging DOWN, uses upper bound (insert after target).
- *          When dragging UP, uses lower bound (insert before target).
- * This ensures widgets stay exactly at the visual drop position.
- * 
- * Performance optimizations:
- * - Early exit for no-op reorders
- * - Cached grid step calculations
- * - Single array operation
  */
 export const reorderWidgets = (
-    widgets,
-    widgetId,
-    newX,
-    newY
-) => {
+    widgets: Widget[],
+    widgetId: string | number,
+    newX: number,
+    newY: number
+): Widget[] => {
     const widgetIndex = widgets.findIndex(w => w.id === widgetId);
     if (widgetIndex === -1) return widgets;
 
@@ -132,14 +127,15 @@ export const reorderWidgets = (
     const targetSortKey = activeRow * COLUMNS + Math.max(0, Math.min(activeCol, COLUMNS - 1));
 
     // Calculate original position for direction detection
+    // @ts-ignore
     const originalRow = widget.gridRow ?? Math.round(widget.y / GRID_STEP_Y);
+    // @ts-ignore
     const originalCol = widget.gridCol ?? Math.round((widget.x - MARGIN) / GRID_STEP_X);
     const originalSortKey = originalRow * COLUMNS + originalCol;
 
     // Early exit: If dragging to same position, preserve previous state completely
-    // This ensures widgets maintain their exact previous position without recalculation
     if (targetSortKey === originalSortKey) {
-        return widgets; // Return original array reference to prevent unnecessary updates
+        return widgets; // Return original array reference
     }
 
     // 1. Remove widget from the list
@@ -158,13 +154,14 @@ export const reorderWidgets = (
         const w = remainingWidgets[mid];
 
         // Calculate SortKey for w using cached grid steps
+        // @ts-ignore
         const wRow = w.gridRow ?? Math.round(w.y / GRID_STEP_Y);
+        // @ts-ignore
         const wCol = w.gridCol ?? Math.round((w.x - MARGIN) / GRID_STEP_X);
         const wSortKey = wRow * COLUMNS + wCol;
 
         if (isDraggingDown) {
             // Upper bound: find first element > target
-            // This places the widget AFTER elements at the target position
             if (wSortKey <= targetSortKey) {
                 low = mid + 1;
             } else {
@@ -172,7 +169,6 @@ export const reorderWidgets = (
             }
         } else {
             // Lower bound: find first element >= target
-            // This places the widget BEFORE elements at the target position
             if (wSortKey < targetSortKey) {
                 low = mid + 1;
             } else {
@@ -187,12 +183,10 @@ export const reorderWidgets = (
     return recalculateLayout(remainingWidgets);
 };
 
-export const appendWidget = (widgets, widget) => recalculateLayout([...widgets, widget]);
+export const appendWidget = (widgets: Widget[], widget: Widget): Widget[] => recalculateLayout([...widgets, widget]);
 
-export const resizeWidgetInList = (widgets, widgetId, newWidth, newHeight) => {
+export const resizeWidgetInList = (widgets: Widget[], widgetId: string | number, newWidth: number, newHeight: number): Widget[] => {
     // Map over widgets to update size, then recalc layout
-    // We do NOT optimize this to single-item update because resizing one item 
-    // can push *everything* below it down.
     return recalculateLayout(widgets.map(w => {
         if (w.id === widgetId) {
             return { ...w, width: newWidth, height: newHeight };
@@ -201,7 +195,7 @@ export const resizeWidgetInList = (widgets, widgetId, newWidth, newHeight) => {
     }));
 };
 
-export const calculateTotalContentHeight = (widgets) => {
+export const calculateTotalContentHeight = (widgets: Widget[]): number => {
     // Early exit for empty widgets
     if (widgets.length === 0) return 0;
 
@@ -215,4 +209,3 @@ export const calculateTotalContentHeight = (widgets) => {
 
     return maxY + MARGIN + 100;
 };
-

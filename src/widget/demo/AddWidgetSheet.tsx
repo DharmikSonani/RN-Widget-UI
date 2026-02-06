@@ -15,13 +15,18 @@ const DATA = [
     `https://images.hdqwalls.com/wallpapers/assassins-creed-game-4k-h8.jpg`,
 ]
 
-const AddWidgetSheet = ({ visible, onClose = () => { } }) => {
+interface AddWidgetSheetProps {
+    visible?: boolean;
+    onClose?: () => void;
+}
+
+const AddWidgetSheet = ({ visible = true, onClose = () => { } }: AddWidgetSheetProps) => {
     const { addWidget } = useWidgetContext();
 
-    const handleAddPress = useCallback((type) => {
+    const handleAddPress = useCallback((type: string) => {
         addWidget(type);
         onClose();
-    }, []);
+    }, [addWidget, onClose]);
 
     return (
         <>

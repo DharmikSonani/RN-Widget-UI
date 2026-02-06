@@ -3,13 +3,17 @@ import { StyleSheet, View, TouchableOpacity } from 'react-native';
 import { Svg, Line, Polyline } from 'react-native-svg';
 import { useWidgetContext } from '../context/WidgetContext';
 
-const EditControls = ({ onAddPress = () => { } }) => {
+interface EditControlsProps {
+    onAddPress?: () => void;
+}
+
+const EditControls = ({ onAddPress = () => { } }: EditControlsProps) => {
     const { state, dispatch } = useWidgetContext();
     const { isEditMode } = useMemo(() => state, [state]);
 
     const handleDone = useCallback(() => {
         dispatch({ type: 'TOGGLE_EDIT_MODE', payload: false });
-    }, []);
+    }, [dispatch]);
 
     if (!isEditMode) return null;
 

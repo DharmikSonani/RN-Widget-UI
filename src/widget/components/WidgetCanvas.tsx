@@ -26,7 +26,7 @@ const WidgetCanvas = () => {
     const [isSheetOpen, setIsSheetOpen] = useState(false);
     // Virtualization State
     const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 });
-    const [draggingId, setDraggingId] = useState(null);
+    const [draggingId, setDraggingId] = useState<string | number | null>(null);
     const scrollY = useSharedValue(0);
 
     const contentHeight = calculateTotalContentHeight(state.widgets);
@@ -37,7 +37,7 @@ const WidgetCanvas = () => {
         widgetsShared.value = state.widgets;
     }, [state.widgets]);
 
-    const scrollRef = useAnimatedRef();
+    const scrollRef = useAnimatedRef<Animated.ScrollView>();
 
     // Track previous visible range on UI thread to avoid redundant JS calls
     const prevStartIndex = useSharedValue(0);
@@ -113,11 +113,11 @@ const WidgetCanvas = () => {
     const globalHeight = useSharedValue(0);
 
     // Auto-Scroll Logic - JS Thread Loop for Stability
-    const rafId = useRef(null);
-    const containerRef = useRef(null);
+    const rafId = useRef<number | null>(null);
+    const containerRef = useRef<View>(null);
     const containerLayout = useSharedValue({ top: 0, bottom: SCREEN_HEIGHT });
 
-    const handleDragStart = useCallback((id) => {
+    const handleDragStart = useCallback((id: string | number) => {
         setDraggingId(id);
         // Measure container on drag start to get accurate boundaries
         if (containerRef.current) {
@@ -128,7 +128,7 @@ const WidgetCanvas = () => {
     }, [containerLayout]);
 
     // Worklet to perform scroll on UI Thread (Smoother execution on Android)
-    const scrollToPosition = (y) => {
+    const scrollToPosition = (y: number) => {
         'worklet';
         scrollTo(scrollRef, 0, y, false);
     };

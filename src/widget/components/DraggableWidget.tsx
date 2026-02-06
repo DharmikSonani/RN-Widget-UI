@@ -10,9 +10,30 @@ import Animated, {
     withTiming,
     withRepeat,
     withSequence,
+    SharedValue,
 } from 'react-native-reanimated';
 import { Svg, Path, Line } from 'react-native-svg';
+import { Widget, WidgetAction } from '../utils/types';
 
+interface DraggableWidgetProps {
+    data: Widget;
+    dispatch: React.Dispatch<WidgetAction>;
+    isEditMode?: boolean;
+    isFocused?: boolean;
+    isOverlay?: boolean;
+    dragY?: SharedValue<number>;
+    isDraggingGlobal?: SharedValue<number>;
+    scrollY?: SharedValue<number>;
+    onDragStart?: (id: string | number) => void;
+    onDragEnd?: () => void;
+    globalOriginX?: SharedValue<number>;
+    globalOriginY?: SharedValue<number>;
+    globalTranslationX?: SharedValue<number>;
+    globalTranslationY?: SharedValue<number>;
+    globalWidth?: SharedValue<number>;
+    globalHeight?: SharedValue<number>;
+    children?: React.ReactNode;
+}
 
 const DraggableWidget = ({
     data,
@@ -32,7 +53,7 @@ const DraggableWidget = ({
     globalWidth,
     globalHeight,
     children
-}) => {
+}: DraggableWidgetProps) => {
     // If I am the original widget and I am focused, I should be hidden (ghosted)
     // because the Overlay version is showing on top.
     // If I am the overlay version, I am visible.
@@ -178,7 +199,7 @@ const DraggableWidget = ({
     };
 
     // Safe callback for drag end logic (timeout + dispatch) on JS thread
-    const handleDragEndAction = useCallback((id, xVal, yVal) => {
+    const handleDragEndAction = useCallback((id: string | number, xVal: number, yVal: number) => {
         // Safety timeout to reset pending state
         // Reduced to 150ms for "immediate" feel on invalid drops, while allowing minimal time for prop updates
         setTimeout(() => {
@@ -195,7 +216,7 @@ const DraggableWidget = ({
         });
     }, [dispatch, isPendingUpdate]);
 
-    const handleResizeEndAction = useCallback((id, wVal, hVal) => {
+    const handleResizeEndAction = useCallback((id: string | number, wVal: number, hVal: number) => {
         // Safety timeout to reset pending state
         setTimeout(() => {
             isPendingUpdate.value = false;
@@ -211,7 +232,7 @@ const DraggableWidget = ({
         });
     }, [dispatch, isPendingUpdate]);
 
-    const handleLongPress = (e) => {
+    const handleLongPress = (e: any) => {
         if (isEditMode || isOverlay) return;
 
         // Calculate Absolute Position
@@ -233,8 +254,10 @@ const DraggableWidget = ({
                     x: absoluteX,
                     y: absoluteY,
                     width: data.width,
-                    height: data.height
-                }
+                    height: data.height,
+                },
+                data: data.data,
+                zIndex: data.zIndex
             }
         });
     };
@@ -496,7 +519,7 @@ const styles = StyleSheet.create({
         position: 'absolute',
         top: -60, // Above widget
         alignSelf: 'center',
-        width: 180,
+        width: 160,
         backgroundColor: '#FFF',
         borderRadius: 12,
         shadowColor: '#000',
@@ -509,7 +532,7 @@ const styles = StyleSheet.create({
     },
     menuItemContainer: {
         paddingVertical: 8,
-        paddingHorizontal: 16,
+        paddingHorizontal: 12,
     },
     menuItem: {
         flexDirection: 'row',
