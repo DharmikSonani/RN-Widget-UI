@@ -366,8 +366,8 @@ const DraggableWidget = ({
             zIndex: isActive ? 9999 : zIndex.value,
             opacity: shouldHide ? 0 : 1, // Hide original
 
-            // Dynamic elevation with smooth transition
-            elevation: withTiming(isActive ? 10 : 4, { duration: 200 }),
+            // Dynamic elevation with spring for smoother non-flickering transition
+            elevation: withSpring(isActive ? 10 : 4, { stiffness: 300, damping: 30 }),
         };
     });
 

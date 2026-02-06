@@ -9,7 +9,7 @@ import {
 import { useWidgetContext } from '../context/WidgetContext';
 import { calculateTotalContentHeight } from '../utils/layoutUtils';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, { runOnJS, useAnimatedScrollHandler, useSharedValue, useAnimatedRef, useAnimatedReaction, scrollTo } from 'react-native-reanimated';
+import Animated, { runOnJS, useAnimatedScrollHandler, useSharedValue, useAnimatedRef, useAnimatedReaction, scrollTo, runOnUI } from 'react-native-reanimated';
 import EditControls from '../demo/EditControls';
 import AddWidgetSheet from '../demo/AddWidgetSheet';
 import DraggableWidget from './DraggableWidget';
@@ -100,10 +100,6 @@ const WidgetCanvas = () => {
         }
     );
 
-    // Memoize handlers to prevent re-renders of children
-    const handleDragStart = useCallback((id) => setDraggingId(id), []);
-    const handleDragEnd = useCallback(() => setDraggingId(null), []);
-
     // Auto-Scroll Shared Values
     const isDragging = useSharedValue(0); // 0 or 1
     const dragY = useSharedValue(0); // Absolute Y position of touch
@@ -116,38 +112,94 @@ const WidgetCanvas = () => {
     const globalWidth = useSharedValue(0);
     const globalHeight = useSharedValue(0);
 
+    // Auto-Scroll Logic - JS Thread Loop for Stability
+    const rafId = useRef(null);
+    const containerRef = useRef(null);
+    const containerLayout = useSharedValue({ top: 0, bottom: SCREEN_HEIGHT });
+
+    const handleDragStart = useCallback((id) => {
+        setDraggingId(id);
+        // Measure container on drag start to get accurate boundaries
+        if (containerRef.current) {
+            containerRef.current.measure((x, y, width, height, pageX, pageY) => {
+                containerLayout.value = { top: pageY, bottom: pageY + height };
+            });
+        }
+    }, [containerLayout]);
+
+    // Worklet to perform scroll on UI Thread (Smoother execution on Android)
     const scrollToPosition = (y) => {
         'worklet';
         scrollTo(scrollRef, 0, y, false);
     };
 
-    // Auto-Scroll Logic - Continuous scrolling at edges during drag
-    useAnimatedReaction(
-        () => {
-            return {
-                isDragging: isDragging.value,
-                y: dragY.value,
-                scrollY: scrollY.value
-            };
-        },
-        (current) => {
-            // Only auto-scroll when actively dragging
-            if (current.isDragging !== 1) return;
+    const performAutoScroll = useCallback(() => {
+        const SCROLL_THRESHOLD = 150;
+        const BASE_SPEED = 5;
+        const MAX_SPEED = 20;
 
-            const SCROLL_THRESHOLD = 100;
-            const SCROLL_SPEED = 20; // Increased for smoother continuous scroll
+        // Read shared values synchronously on JS thread (safe for read)
+        const currentDragY = dragY.value;
+        const currentScrollY = scrollY.value;
+        const currentIsDragging = isDragging.value;
 
-            // Check if near bottom edge
-            if (current.y > SCREEN_HEIGHT - SCROLL_THRESHOLD) {
-                // Scroll Down continuously
-                scrollToPosition(current.scrollY + SCROLL_SPEED);
-            }
-            // Check if near top edge
-            else if (current.y < SCROLL_THRESHOLD && current.scrollY > 0) {
-                // Scroll Up continuously
-                scrollToPosition(current.scrollY - SCROLL_SPEED);
-            }
+        if (currentIsDragging !== 1) return;
+
+        let speed = 0;
+
+        // Fallback boundaries if measurement fails (0 and Screen Height)
+        // This ensures scrolling works even if measure is async or failed
+        const layout = containerLayout.value;
+        const topEdge = layout.top || 0;
+        const bottomEdge = (layout.bottom && layout.bottom > 0) ? layout.bottom : SCREEN_HEIGHT;
+
+        // Bottom Edge
+        // Check if drag is within threshold distance of value bottom edge
+        if (currentDragY > bottomEdge - SCROLL_THRESHOLD) {
+            const ratio = (currentDragY - (bottomEdge - SCROLL_THRESHOLD)) / SCROLL_THRESHOLD;
+            speed = BASE_SPEED + (ratio * (MAX_SPEED - BASE_SPEED));
+
+            // Dispatch directly to UI thread for smooth native scrolling
+            runOnUI(scrollToPosition)(currentScrollY + speed);
         }
+        // Top Edge
+        // Check if drag is within threshold distance of top edge
+        else if (currentDragY < topEdge + SCROLL_THRESHOLD && currentScrollY > 0) {
+            const ratio = ((topEdge + SCROLL_THRESHOLD) - currentDragY) / SCROLL_THRESHOLD;
+            speed = BASE_SPEED + (ratio * (MAX_SPEED - BASE_SPEED));
+
+            // Dispatch directly to UI thread
+            runOnUI(scrollToPosition)(Math.max(0, currentScrollY - speed));
+        }
+
+        // Loop MUST continue as long as we are dragging, even if not currently scrolling
+        // This ensures that if the user drags back to the edge, it catches it.
+        rafId.current = requestAnimationFrame(performAutoScroll);
+    }, [SCREEN_HEIGHT]);
+
+    const startAutoScroll = useCallback(() => {
+        if (rafId.current) cancelAnimationFrame(rafId.current);
+        performAutoScroll();
+    }, [performAutoScroll]);
+
+    const stopAutoScroll = useCallback(() => {
+        if (rafId.current) {
+            cancelAnimationFrame(rafId.current);
+            rafId.current = null;
+        }
+    }, []);
+
+    // Monitor drag state changes to start/stop loop
+    useAnimatedReaction(
+        () => isDragging.value,
+        (isDraggingValue, prevValue) => {
+            if (isDraggingValue === 1 && prevValue !== 1) {
+                runOnJS(startAutoScroll)();
+            } else if (isDraggingValue !== 1 && prevValue === 1) {
+                runOnJS(stopAutoScroll)();
+            }
+        },
+        [startAutoScroll, stopAutoScroll]
     );
 
     const scrollHandler = useAnimatedScrollHandler({
@@ -179,12 +231,13 @@ const WidgetCanvas = () => {
             runOnJS(dispatch)({ type: 'TOGGLE_EDIT_MODE', payload: true });
         });
 
+    const handleDragEnd = useCallback(() => setDraggingId(null), []);
     const handleAddPress = useCallback(() => { setIsSheetOpen(true) }, [])
 
     const handleSheetClose = useCallback(() => { setIsSheetOpen(false) }, [])
 
     return (
-        <View style={styles.container}>
+        <View ref={containerRef} style={styles.container}>
             {/* Widget Canvas */}
             {
                 state.widgets.length === 0 ?
@@ -203,7 +256,7 @@ const WidgetCanvas = () => {
                         onScroll={scrollHandler}
                         scrollEventThrottle={16} // Throttle to ~60fps for logic check, UI thread is still 60fps
                         removeClippedSubviews={false} // We handle it manually
-                        scrollEnabled={!draggingId} // Disable scroll during drag to prevent conflicts
+                    // scrollEnabled={!draggingId} REMOVED to allow simple scrolling
                     >
                         {/* Widget Layer */}
                         <View style={[styles.canvasContainer, { height: contentHeight }]}>
