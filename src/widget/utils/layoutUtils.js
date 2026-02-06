@@ -1,8 +1,6 @@
-import { COLUMN_WIDTH, COLUMNS, MARGIN, ROW_HEIGHT } from './measure';
+import { COLUMN_WIDTH, COLUMNS, MARGIN, ROW_HEIGHT, GRID_STEP_X, GRID_STEP_Y } from './measure';
 
 export const getGridSizeFromDimensions = (width, height) => {
-    // Determine closest span based on width/height
-    // Thresholds can be simple
     const colSpan = width > COLUMN_WIDTH + 20 ? 2 : 1;
     const rowSpan = height > ROW_HEIGHT + 20 ? 2 : 1;
     return { colSpan, rowSpan };
@@ -16,75 +14,107 @@ export const getDimensionsFromGridSize = (colSpan, rowSpan) => {
 }
 
 /**
- * Calculates the layout for a list of widgets, respecting their Grid Spans.
- * It flows them left-to-right, top-to-bottom, filling gaps where possible.
+ * Optimized layout calculation using Skyline / Horizon algorithm.
+ * Time Complexity: O(N * C) where C is number of columns (constant).
+ * 
+ * Performance optimizations:
+ * - Uses Uint16Array for horizon (faster than regular array)
+ * - Cached grid step calculations
+ * - Reduced object creation
+ * - Early exit conditions
  */
 export const recalculateLayout = (widgets) => {
-    // 1. Grid State: Track occupied slots
-    // We can use a simple 2D array or just a list of occupied cells
-    // Since rows are infinite, a Map<rowIndex, boolean[]> might be easier
-    // key: rowIndex, value: [col0_occupied, col1_occupied]
-    const grid = {};
+    // Early exit for empty widgets
+    if (widgets.length === 0) return [];
 
-    const isOccupied = (row, col, colSpan, rowSpan) => {
-        for (let r = row; r < row + rowSpan; r++) {
-            for (let c = col; c < col + colSpan; c++) {
-                if (grid[r] && grid[r][c]) return true;
-                if (c >= COLUMNS) return true; // Out of bounds
-            }
-        }
-        return false;
-    };
+    // Horizon: Tracks the lowest available Y index (row index) for each column.
+    // Using typed array for better performance
+    const horizon = new Uint16Array(COLUMNS);
 
-    const markOccupied = (row, col, colSpan, rowSpan) => {
-        for (let r = row; r < row + rowSpan; r++) {
-            if (!grid[r]) grid[r] = [false, false]; // Init row
-            for (let c = col; c < col + colSpan; c++) {
-                grid[r][c] = true;
-            }
-        }
-    };
-
-    // 2. Place each widget
-    return widgets.map(widget => {
+    const layoutWidgets = widgets.map(widget => {
         const { width, height } = widget;
         const { colSpan, rowSpan } = getGridSizeFromDimensions(width, height);
 
-        // Find first available position
-        let row = 0;
-        let col = 0;
-        let placed = false;
+        let bestRow = Infinity;
+        let bestCol = 0;
 
-        while (!placed) {
-            // Check columns in this row
-            for (let c = 0; c < COLUMNS; c++) {
-                // Optimization: Can we fit here?
-                if (c + colSpan <= COLUMNS && !isOccupied(row, c, colSpan, rowSpan)) {
-                    // Found spot
-                    col = c;
-                    placed = true;
-                    break;
-                }
+        // Find the "skyline" segment that minimizes Y (and then X aka col)
+        // We need 'colSpan' contiguous columns.
+        for (let c = 0; c <= COLUMNS - colSpan; c++) {
+            // Find the maximum height in this span [c, c + colSpan)
+            let maxH = 0;
+            for (let span = 0; span < colSpan; span++) {
+                maxH = Math.max(maxH, horizon[c + span]);
             }
-            if (!placed) row++;
+
+            // If this position (maxH) is better (lower) than current best, pick it.
+            if (maxH < bestRow) {
+                bestRow = maxH;
+                bestCol = c;
+            }
         }
 
-        // Mark spot
-        markOccupied(row, col, colSpan, rowSpan);
+        // Commit placement - update horizon for the covered columns
+        for (let span = 0; span < colSpan; span++) {
+            horizon[bestCol + span] = bestRow + rowSpan;
+        }
 
-        // Calculate absolute position
+        // Use cached grid step values for position calculation
         const dim = getDimensionsFromGridSize(colSpan, rowSpan);
+        const newX = MARGIN + bestCol * GRID_STEP_X;
+        const newY = bestRow * GRID_STEP_Y;
+        const newW = dim.width;
+        const newH = dim.height;
+
+        // OPTIMIZATION: Object Identity Preservation
+        // If the calculated layout matches the existing one, return the original object.
+        // This prevents React.memo from invalidating the component.
+        if (
+            widget.x === newX &&
+            widget.y === newY &&
+            widget.width === newW &&
+            widget.height === newH &&
+            widget.gridRow === bestRow &&
+            widget.gridCol === bestCol
+        ) {
+            return widget;
+        }
 
         return {
             ...widget,
-            x: MARGIN + col * (COLUMN_WIDTH + MARGIN),
-            y: row * (ROW_HEIGHT + MARGIN),
-            width: dim.width,
-            height: dim.height
+            x: newX,
+            y: newY,
+            width: newW,
+            height: newH,
+            // Store grid position for easier sorting/debugging
+            gridRow: bestRow,
+            gridCol: bestCol,
         };
     });
+
+    // Sort by Y position for virtualization efficiency
+    // Use stable sort to maintain relative order
+    layoutWidgets.sort((a, b) => {
+        if (a.y === b.y) return a.x - b.x;
+        return a.y - b.y;
+    });
+
+    return layoutWidgets;
 };
 
+/**
+ * Optimized reordering with direction-aware insertion.
+ * Uses Binary Search to find insertion index based on sorts produced by layout.
+ * 
+ * Key Fix: When dragging DOWN, uses upper bound (insert after target).
+ *          When dragging UP, uses lower bound (insert before target).
+ * This ensures widgets stay exactly at the visual drop position.
+ * 
+ * Performance optimizations:
+ * - Early exit for no-op reorders
+ * - Cached grid step calculations
+ * - Single array operation
+ */
 export const reorderWidgets = (
     widgets,
     widgetId,
@@ -96,73 +126,93 @@ export const reorderWidgets = (
 
     const widget = widgets[widgetIndex];
 
-    // Determine Target Index mostly by Y position, then X
-    // Simple heuristic: Layout is mostly linear flow
-    // Sort all widgets by Position for current index determination is tricky because of variable sizes
-    // Instead, let's just infer index based on center-point distance to other widgets?
-    // OR simpler: Calculate 'virtual index' = row * 2 + col
+    // Calculate target position using cached grid steps
+    const activeCol = Math.round((newX - MARGIN) / GRID_STEP_X);
+    const activeRow = Math.round(newY / GRID_STEP_Y);
+    const targetSortKey = activeRow * COLUMNS + Math.max(0, Math.min(activeCol, COLUMNS - 1));
 
-    // Let's use the simple swap approach: 
-    // Find the widget currently closest to the drop point
-    let closestIndex = -1;
-    let minDist = Infinity;
+    // Calculate original position for direction detection
+    const originalRow = widget.gridRow ?? Math.round(widget.y / GRID_STEP_Y);
+    const originalCol = widget.gridCol ?? Math.round((widget.x - MARGIN) / GRID_STEP_X);
+    const originalSortKey = originalRow * COLUMNS + originalCol;
 
-    widgets.forEach((w, idx) => {
-        if (w.id === widgetId) return; // Skip self
-        const dist = Math.sqrt(Math.pow(w.x - newX, 2) + Math.pow(w.y - newY, 2));
-        if (dist < minDist) {
-            minDist = dist;
-            closestIndex = idx;
-        }
-    });
-
-    // If newY is way below the last widget, append
-    // This part is heuristic-heavy. Let's rely on list order.
-    // Ideally we project grid position -> index. 
-    // For variable size grid, index isn't 1:1 with position, but it determines ORDER of placement.
-
-    const newWidgets = [...widgets];
-    newWidgets.splice(widgetIndex, 1);
-
-    if (closestIndex !== -1) {
-        // Determine if we insert before or after closest
-        // If we are "above" or "left" of closest, insert before.
-        const target = widgets[closestIndex];
-        if (newY < target.y || (newY < target.y + target.height && newX < target.x)) {
-            // Insert before
-            // Adjust index because we removed one
-            let insertAt = closestIndex;
-            if (widgetIndex < closestIndex) insertAt--; // Shifted
-            newWidgets.splice(Math.max(0, insertAt), 0, widget);
-        } else {
-            // Insert after
-            let insertAt = closestIndex + 1;
-            if (widgetIndex < closestIndex) insertAt--;
-            newWidgets.splice(insertAt, 0, widget);
-        }
-    } else {
-        // Append
-        newWidgets.push(widget);
+    // Early exit: If dragging to same position, preserve previous state completely
+    // This ensures widgets maintain their exact previous position without recalculation
+    if (targetSortKey === originalSortKey) {
+        return widgets; // Return original array reference to prevent unnecessary updates
     }
 
-    return recalculateLayout(newWidgets);
+    // 1. Remove widget from the list
+    const remainingWidgets = [...widgets];
+    remainingWidgets.splice(widgetIndex, 1);
+
+    // 2. Find insertion index using Binary Search with direction awareness
+    let low = 0;
+    let high = remainingWidgets.length;
+
+    // Determine drag direction
+    const isDraggingDown = targetSortKey > originalSortKey;
+
+    while (low < high) {
+        const mid = (low + high) >>> 1;
+        const w = remainingWidgets[mid];
+
+        // Calculate SortKey for w using cached grid steps
+        const wRow = w.gridRow ?? Math.round(w.y / GRID_STEP_Y);
+        const wCol = w.gridCol ?? Math.round((w.x - MARGIN) / GRID_STEP_X);
+        const wSortKey = wRow * COLUMNS + wCol;
+
+        if (isDraggingDown) {
+            // Upper bound: find first element > target
+            // This places the widget AFTER elements at the target position
+            if (wSortKey <= targetSortKey) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        } else {
+            // Lower bound: find first element >= target
+            // This places the widget BEFORE elements at the target position
+            if (wSortKey < targetSortKey) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+    }
+
+    // Insert at calculated position
+    remainingWidgets.splice(low, 0, widget);
+
+    return recalculateLayout(remainingWidgets);
 };
 
 export const appendWidget = (widgets, widget) => recalculateLayout([...widgets, widget]);
 
-export const resizeWidgetInList = (widgets, widgetId, newWidth, newHeight) => recalculateLayout(widgets.map(w => {
-    if (w.id === widgetId) {
-        // Apply new raw dimensions, recalculateLayout will snap them
-        return { ...w, width: newWidth, height: newHeight };
-    }
-    return w;
-}));
+export const resizeWidgetInList = (widgets, widgetId, newWidth, newHeight) => {
+    // Map over widgets to update size, then recalc layout
+    // We do NOT optimize this to single-item update because resizing one item 
+    // can push *everything* below it down.
+    return recalculateLayout(widgets.map(w => {
+        if (w.id === widgetId) {
+            return { ...w, width: newWidth, height: newHeight };
+        }
+        return w;
+    }));
+};
 
 export const calculateTotalContentHeight = (widgets) => {
+    // Early exit for empty widgets
+    if (widgets.length === 0) return 0;
+
     let maxY = 0;
-    widgets.forEach(w => {
-        const bottom = w.y + w.height;
-        if (bottom > maxY) maxY = bottom;
-    });
-    return maxY + MARGIN + 100; // Extra padding
+    // Scan last few widgets, as the array is sorted by Y.
+    const scanCount = Math.min(widgets.length, COLUMNS + 2);
+    for (let i = 0; i < scanCount; i++) {
+        const w = widgets[widgets.length - 1 - i];
+        if (w.y + w.height > maxY) maxY = w.y + w.height;
+    }
+
+    return maxY + MARGIN + 100;
 };
+

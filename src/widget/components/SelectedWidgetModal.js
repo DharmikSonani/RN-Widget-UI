@@ -63,6 +63,8 @@ const SelectedWidgetModal = () => {
                                 key={`${original.id}_overlay`}
                                 data={overlayData}
                                 isOverlay={true}
+                                dispatch={dispatch}
+                                scrollY={null}
                             >
                                 {/* Replace with Your Component */}
                                 <Image

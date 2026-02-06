@@ -38,7 +38,7 @@ const AddWidgetSheet = ({ visible, onClose = () => { } }) => {
                         <View style={styles.handle} />
                         <Text style={styles.title}>Add Widget</Text>
 
-                        <ScrollView contentContainerStyle={styles.grid}>
+                        <ScrollView contentContainerStyle={styles.grid} showsVerticalScrollIndicator={false}>
                             {
                                 DATA.map((uri, index) =>
                                     <TouchableOpacity key={index} style={styles.gridItem} onPress={() => handleAddPress(uri)}>

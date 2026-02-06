@@ -1,5 +1,6 @@
-import React, { createContext, useReducer, useContext } from 'react';
-import { appendWidget, reorderWidgets, resizeWidgetInList, recalculateLayout, COLUMN_WIDTH, ROW_HEIGHT } from '../utils/layoutUtils';
+import React, { createContext, useReducer, useContext, useCallback, useMemo } from 'react';
+import { appendWidget, reorderWidgets, resizeWidgetInList, recalculateLayout } from '../utils/layoutUtils';
+import { COLUMN_WIDTH, ROW_HEIGHT } from '../utils/measure';
 
 const initialState = {
     widgets: [],
@@ -48,12 +49,11 @@ const widgetReducer = (state, action) => {
             };
 
         case 'BRING_TO_FRONT':
-            // In a grid layout, Z-Index is less relevant for layout but good for drag
-            // We keep the list order for layout, but maybe zIndex for visual
+            // Only update the widget that needs z-index change
             return {
                 ...state,
                 widgets: state.widgets.map(w =>
-                    w.id === action.payload ? { ...w, zIndex: 999 } : { ...w, zIndex: 1 }
+                    w.id === action.payload ? { ...w, zIndex: 999 } : w
                 )
             };
 
@@ -78,7 +78,7 @@ const WidgetContext = createContext(undefined);
 export const WidgetProvider = ({ children }) => {
     const [state, dispatch] = useReducer(widgetReducer, initialState);
 
-    const addWidget = (data) => {
+    const addWidget = useCallback((data) => {
         const id = Date.now().toString();
         // Randomize position slightly to avoid perfect overlap if multiple added
         const offset = Math.random() * 20;
@@ -94,10 +94,12 @@ export const WidgetProvider = ({ children }) => {
         };
 
         dispatch({ type: 'ADD_WIDGET', payload: newWidget });
-    };
+    }, []);
+
+    const contextValue = useMemo(() => ({ state, dispatch, addWidget }), [state, addWidget]);
 
     return (
-        <WidgetContext.Provider value={{ state, dispatch, addWidget }}>
+        <WidgetContext.Provider value={contextValue}>
             {children}
         </WidgetContext.Provider>
     );
